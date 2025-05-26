@@ -1,0 +1,186 @@
+import tkinter as tk
+import math
+import pyfirmata2 
+
+offsetl2=0
+offsetl1=90
+lenmult=4
+l1 = 20*lenmult
+l2 = 20*lenmult
+
+
+board = pyfirmata2.Arduino("COM5")
+servo_pin_13 = board.get_pin('d:9:s')
+servo_pin_11 = board.get_pin('d:11:s')
+
+L1 = l1
+L2 = l2
+
+# Angle limits in degrees
+ANGLE_MIN = 0
+ANGLE_MAX = 180
+
+def within_limits(theta1_deg, theta2_deg):
+    return (ANGLE_MIN <= theta1_deg <= ANGLE_MAX) and (ANGLE_MIN <= theta2_deg <= ANGLE_MAX)
+
+def inverse_kinematics_select_solution(x, y, prev_theta1_deg, prev_theta2_deg):
+    
+    dist = math.hypot(x, y)
+
+    # Check if the target is within reach
+    if dist > (L1 + L2) or dist < abs(L1 - L2):
+        return prev_theta1_deg, prev_theta2_deg
+
+    # Compute the angle for theta2 using the Law of Cosines
+    cos_angle_between_links = (x**2 + y**2 - L1**2 - L2**2) / (2 * L1 * L2)
+
+    # Clamp due to floating-point precision errors
+    if abs(cos_angle_between_links) > 1.0:
+        return prev_theta1_deg, prev_theta2_deg
+
+    angle_between_links_options = [math.acos(cos_angle_between_links), -math.acos(cos_angle_between_links)]
+    valid_solutions = []
+
+    for angle_between_links in angle_between_links_options:
+        # Compute corresponding theta1
+        k1 = L1 + L2 * math.cos(angle_between_links)
+        k2 = L2 * math.sin(angle_between_links)
+        theta1 = math.atan2(y, x) - math.atan2(k2, k1)
+
+        # Convert to degrees and normalize
+        theta1_deg = math.degrees(theta1) % 360
+        if theta1_deg > 180:
+            theta1_deg = 360 - theta1_deg
+
+        # Correct θ2: 90° - (angle between links)
+        theta2_deg = 90 + math.degrees(angle_between_links)
+        if theta2_deg > 180:
+            theta2_deg = 360 - theta2_deg
+
+        if within_limits(theta1_deg, theta2_deg):
+            valid_solutions.append((theta1_deg, theta2_deg))
+
+    if not valid_solutions:
+        return prev_theta1_deg, prev_theta2_deg
+    elif len(valid_solutions) == 1:
+        return valid_solutions[0]
+    else:
+        # Choose solution closest to previous angles
+        def distance(sol):
+            return abs(sol[0] - prev_theta1_deg) + abs(sol[1] - prev_theta2_deg)
+        closest = min(valid_solutions, key=distance)
+        return closest
+    
+
+
+
+def update_position(val=None):
+    x = w.get()
+    y = w2.get()
+
+    # Calculate new position
+    convertx = (l1 * math.sin(math.radians(x + offsetl1))) + 200
+    converty = (l1 * math.cos(math.radians(x + offsetl1))) + 200
+
+    convertx2 = (l2 * math.sin(math.radians(y+ x + offsetl2))) + convertx
+    converty2 = (l2 * math.cos(math.radians(y+ x + offsetl2))) + converty
+
+    # Update object position
+    canvas.coords(obj,
+                  convertx - obj_radius, converty - obj_radius,
+                  convertx + obj_radius, converty + obj_radius)
+
+    # Update line position
+    canvas.coords(line, 200, 200, convertx, converty)
+
+    canvas.coords(obj2,
+                  convertx2 - obj_radius, converty2 - obj_radius,
+                  convertx2 + obj_radius, converty2 + obj_radius)
+
+    # Update line position
+    canvas.coords(line2, convertx, converty, convertx2, converty2)
+
+
+root = tk.Tk()
+
+window_width = 400
+window_height = 400
+canvas = tk.Canvas(root, width=window_width, height=window_height)
+canvas.pack()
+
+obj_radius = 10
+
+obj = canvas.create_oval(200 - obj_radius, 200 - obj_radius,
+                         200 + obj_radius, 200 + obj_radius, fill="blue")
+obj2 = canvas.create_oval(200 - obj_radius, 200 - obj_radius,
+                         200 + obj_radius, 200 + obj_radius, fill="blue")
+
+line = canvas.create_line(200, 200, 200, 200)
+line2 = canvas.create_line(200, 200, 200, 200)
+
+# Sliders for X and Y
+w = tk.Scale(root, from_=0, to=180, orient="horizontal", label="X Position", command=update_position)
+w.pack()
+w2 = tk.Scale(root, from_=0, to=180, orient="horizontal", label="Y Position", command=update_position)
+w2.pack()
+
+w.set(90)
+w2.set(90)
+prevtheta1=90
+prevtheta2=90
+
+center_x = window_width / 2
+center_y = window_height / 2
+obj3 = canvas.create_oval(center_x - obj_radius, center_y - obj_radius,
+                         center_x + obj_radius, center_y + obj_radius, fill="blue")
+g
+dragging = False
+start_x = 200
+start_y = 200
+
+def on_press(event):
+    global dragging, start_x, start_y
+    dragging = True
+    start_x = event.x
+    start_y = event.y
+
+def on_release(event):
+    global dragging
+    dragging = False
+
+
+def on_motion(event):
+    global dragging
+    if dragging:
+
+        x = event.x
+        y = event.y
+        x = max(min(x, window_width), 0)
+        y = max(min(y, window_height), 0)
+
+        canvas.coords(obj3, x - obj_radius, y - obj_radius, x + obj_radius, y + obj_radius)
+
+        
+        prevtheta1,prevtheta2=w.get(),w2.get()
+        x=x-200
+        y=(400-y)-200
+        theta1,theta2=inverse_kinematics_select_solution(x,y,prevtheta1,prevtheta2)
+        
+        print(x,y)
+        print(theta1,theta2)
+        
+        theta1,theta2=int(theta1),int(theta2)
+        servo_pin_13.write(theta2)
+        servo_pin_11.write(theta1)
+        w.set(theta1)
+        w2.set(theta2)
+        
+
+
+
+
+canvas.bind("<ButtonPress-1>", on_press)  # When mouse is pressed
+canvas.bind("<B1-Motion>", on_motion)    # While mouse is dragged
+canvas.bind("<ButtonRelease-1>", on_release)  # When mouse is released
+
+root.mainloop()
